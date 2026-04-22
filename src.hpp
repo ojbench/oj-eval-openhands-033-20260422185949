@@ -2,6 +2,7 @@
 #define SJTU_LIST_HPP
 
 #include <cstddef>
+#include <new>
 #include <utility>
 
 namespace sjtu {
@@ -11,19 +12,29 @@ namespace sjtu {
 template <typename T> class list {
 protected:
   struct node {
-    T *data;
     node *prev;
     node *next;
-    node() : data(nullptr), prev(this), next(this) {}
-    explicit node(const T &v) : data(new T(v)), prev(nullptr), next(nullptr) {}
-    ~node() { if (data) { delete data; data = nullptr; } }
+    bool is_sentinel;
+    alignas(T) unsigned char storage[sizeof(T)];
+
+    node() : prev(this), next(this), is_sentinel(true) {}
+    explicit node(const T &v) : prev(nullptr), next(nullptr), is_sentinel(false) {
+      ::new (static_cast<void*>(storage)) T(v);
+    }
+    T *data_ptr() { return reinterpret_cast<T*>(storage); }
+    const T *data_ptr() const { return reinterpret_cast<const T*>(storage); }
+    ~node() {
+      if (!is_sentinel) {
+        data_ptr()->~T();
+      }
+    }
   };
 
 protected:
-  node *sentinel; // circular sentinel node; sentinel->data == nullptr
+  node *sentinel; // circular sentinel node
   size_t n;
 
-  node *insert(node *pos, node *cur) {
+  node *link_before(node *pos, node *cur) {
     // link cur before pos
     cur->next = pos;
     cur->prev = pos->prev;
@@ -32,7 +43,7 @@ protected:
     return cur;
   }
 
-  node *erase(node *pos) {
+  node *unlink(node *pos) {
     // unlink pos from the list; caller responsible for deleting node
     pos->prev->next = pos->next;
     pos->next->prev = pos->prev;
@@ -51,13 +62,13 @@ public:
 
   public:
     iterator() : ptr(nullptr) {}
-    iterator operator++(int) { iterator tmp = *this; if (ptr) ptr = ptr->next; return tmp; }
-    iterator &operator++() { if (ptr) ptr = ptr->next; return *this; }
-    iterator operator--(int) { iterator tmp = *this; if (ptr) ptr = ptr->prev; return tmp; }
-    iterator &operator--() { if (ptr) ptr = ptr->prev; return *this; }
+    iterator operator++(int) { iterator tmp = *this; ptr = ptr->next; return tmp; }
+    iterator &operator++() { ptr = ptr->next; return *this; }
+    iterator operator--(int) { iterator tmp = *this; ptr = ptr->prev; return tmp; }
+    iterator &operator--() { ptr = ptr->prev; return *this; }
 
-    T &operator*() const { return *(ptr->data); }
-    T *operator->() const noexcept { return ptr->data; }
+    T &operator*() const { return *(ptr->data_ptr()); }
+    T *operator->() const noexcept { return ptr->data_ptr(); }
 
     bool operator==(const iterator &rhs) const { return ptr == rhs.ptr; }
     bool operator==(const const_iterator &rhs) const { return ptr == rhs.ptr; }
@@ -74,13 +85,13 @@ public:
   public:
     const_iterator() : ptr(nullptr) {}
     const_iterator(const iterator &it) : ptr(it.ptr) {}
-    const_iterator operator++(int) { const_iterator tmp = *this; if (ptr) ptr = ptr->next; return tmp; }
-    const_iterator &operator++() { if (ptr) ptr = ptr->next; return *this; }
-    const_iterator operator--(int) { const_iterator tmp = *this; if (ptr) ptr = ptr->prev; return tmp; }
-    const_iterator &operator--() { if (ptr) ptr = ptr->prev; return *this; }
+    const_iterator operator++(int) { const_iterator tmp = *this; ptr = ptr->next; return tmp; }
+    const_iterator &operator++() { ptr = ptr->next; return *this; }
+    const_iterator operator--(int) { const_iterator tmp = *this; ptr = ptr->prev; return tmp; }
+    const_iterator &operator--() { ptr = ptr->prev; return *this; }
 
-    const T &operator*() const { return *(ptr->data); }
-    const T *operator->() const noexcept { return ptr->data; }
+    const T &operator*() const { return *(ptr->data_ptr()); }
+    const T *operator->() const noexcept { return ptr->data_ptr(); }
 
     bool operator==(const const_iterator &rhs) const { return ptr == rhs.ptr; }
     bool operator==(const iterator &rhs) const { return ptr == rhs.ptr; }
@@ -103,8 +114,8 @@ public:
     return *this;
   }
 
-  const T &front() const { return *(sentinel->next->data); }
-  const T &back() const { return *(sentinel->prev->data); }
+  const T &front() const { return *(sentinel->next->data_ptr()); }
+  const T &back() const { return *(sentinel->prev->data_ptr()); }
 
   iterator begin() { return iterator(sentinel->next); }
   const_iterator cbegin() const { return const_iterator(sentinel->next); }
@@ -119,7 +130,7 @@ public:
     node *cur = sentinel->next;
     while (cur != sentinel) {
       node *nxt = cur->next;
-      erase(cur);
+      unlink(cur);
       delete cur;
       cur = nxt;
     }
@@ -130,7 +141,7 @@ public:
   virtual iterator insert(iterator pos, const T &value) {
     node *p = pos.ptr;
     node *cur = new node(value);
-    insert(p, cur);
+    link_before(p, cur);
     ++n;
     return iterator(cur);
   }
@@ -138,7 +149,7 @@ public:
   virtual iterator erase(iterator pos) {
     node *p = pos.ptr;
     node *nxt = p->next;
-    erase(p);
+    unlink(p);
     delete p;
     --n;
     return iterator(nxt);
